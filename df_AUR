@@ -1,0 +1,137 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+# In[1]:
+
+
+def main(file_name):
+    global pathout
+    global pathlog
+    global equipment_name
+    global start_datetime1
+    pathout = "#####################"
+    pathlog = "#####################"
+    try:
+        
+        import pandas as pd
+        import numpy as np
+        import os, sys
+        import datetime
+        from datetime import timedelta
+        from datetime import datetime
+        import dateutil.parser
+        pd.set_option('display.max_rows', None)
+        df = pd.read_csv(file_name,
+                            names=['col0','col1','col2','col3','col4','col5','col6','col7','col8','col9','col10','col11','col12','col13']) 
+        df = df.dropna(how='all')
+        df['col0'] = df['col0'].str.strip()
+        incident_date = df.loc[df['col0'] == 'DATE'].iloc[0,1].replace(".","/")
+        print(incident_date)
+        ##AUR elements
+        incident_date = dateutil.parser.parse(incident_date, dayfirst=True)
+        #incident_date = datetime.strptime(incident_date, "%d/%m/%Y")
+        print(incident_date)
+        incident_datenumber = str(incident_date.year) + str(incident_date.month) + str(incident_date.day)
+        #print(incident_datenumber)
+        equipment_name = df.loc[df['col0'] == 'MACHINE ID'].iloc[0,1].replace(" ", "")
+
+        #shift
+        sft = []
+        sft = df['col0'] + df['col1']
+        shift = ''
+        if any("NSX" in str(i) for i in sft):
+            shift = 'N'
+        else:
+            shift = 'D'
+
+        ##TUM
+        code = ['RL','SR','PC','LH','DM','PD','RC','TC','RH','MC','DP','EW','RW','PS','TM','MB','SM','DS','PI','BD','WT','BL','PU','NP','SB','IN','RB','RM','RA']
+        TUM_table = df.loc[df['col0'].isin(code)]
+        TUM_table = TUM_table.loc[TUM_table['col13'].astype(str).str.isnumeric()]
+        TUM_table = TUM_table.replace(np.nan, 0)
+        #TUM_Time = TUM_table.iloc[:, 1:13]
+        #print(TUM_table)
+        #start time
+        if shift == 'D':
+            start_time = '6:00:00'
+        elif shift == 'N':
+            start_time = '18:00:00'
+        else:
+            start_time = 'not specified'
+        start_time = datetime.strptime(start_time, '%H:%M:%S')
+        start_datetime = datetime.combine(datetime.date(incident_date), 
+                                datetime.time(start_time))
+        start_datetime1 = start_datetime
+        end_datetime1 = start_datetime + timedelta(seconds=43199)
+        #print(end_datetime1)
+
+        code_duration_kvp = []
+        for i in range(1,13):
+            code_duration = dict(zip(TUM_table.col0, TUM_table['col'+ str(i)]))
+            code_duration = { key:value for (key,value) in code_duration.items() if value != 0}
+            code_duration_kvp.append(code_duration)
+        code_duration_kvp = [ele for ele in ({key: val for key, val in sub.items() if val} for sub in code_duration_kvp) if ele]
+        print(code_duration_kvp)
+        error_total_mins = ""
+        print(sum([int(val) for sub in code_duration_kvp for key, val in sub.items()]))
+        if sum([int(val) for sub in code_duration_kvp for key, val in sub.items()]) != 720:
+            error_total_mins = "total minutes does not equal to 720"
+
+        ##construct AUR
+        aur_header = ['Parent Object Type','Parent Object Alias1','Incident Alias1','Incident Definition Alias1','Start Date','End Date','Comment','Responsibility Alias1','Operating Capacity','Applicable Override','Reason Code Alias1']
+        Parent_Object_Type = 'Equipment'
+        Parent_Object_Alias1 = equipment_name
+        SMU_Start = df.loc[df['col0'] == 'START HRS'].iloc[0,1] 
+        SMU_End = df.loc[df['col0'] == 'END HOURS'].iloc[0,1]
+        Comment = SMU_Start + '-' + SMU_End
+        Responsibility_Alias1 =''
+        Operating_Capacity = 1
+        Applicable_Override =''
+        Reason_Code_Alias1 =''
+        
+        sRec = []
+        for sub in code_duration_kvp:
+            for key, val in sub.items():
+                minutes = timedelta(minutes = int(val))
+                start_datetime += minutes
+                end_datetime = start_datetime + timedelta(seconds=1)
+                Incident_Alias1 = 'TUM-INCIDENT-' + key + '-' + Parent_Object_Alias1 + '-' + str(start_datetime1.year) + str(start_datetime1.month) + str(start_datetime1.day) + '-' + shift
+                Incident_Definition_Alias1 = 'TUM-DEF-'+ key
+                construct = Parent_Object_Type, Parent_Object_Alias1, Incident_Alias1 + str(start_datetime.hour) + str(start_datetime.minute) + str(start_datetime.second), Incident_Definition_Alias1,datetime.strftime(end_datetime,"%d/%m/%Y %H:%M:%S"), datetime.strftime(start_datetime,"%d/%m/%Y %H:%M:%S"), Comment, Responsibility_Alias1, Operating_Capacity, Applicable_Override, Reason_Code_Alias1
+                sRec.append(construct)
+
+        df = pd.DataFrame(sRec,columns = aur_header) 
+        df['Start Date'] = df['Start Date'].shift(1)
+        df.at[0,'Start Date'] = datetime.strftime(start_datetime1,"%d/%m/%Y %H:%M:%S")
+        df.iloc[-1, df.columns.get_loc('End Date')] = datetime.strftime(end_datetime1,"%d/%m/%Y %H:%M:%S")
+        logname = 'AURIncidentIV-' + equipment_name + str(start_datetime1.year) + str(start_datetime1.month) + str(start_datetime1.day) + shift + '-' + file_name[-11:-4] + '.log'
+        filename = 'AURIncidentIV-' + equipment_name + str(start_datetime1.year) + str(start_datetime1.month) + str(start_datetime1.day) + shift + '-' + file_name[-11:-4] + '.csv'
+        output_file = os.path.join(pathout, filename)
+        output_log = os.path.join(pathlog, logname)
+        df.to_csv(output_file,index=False)
+        with open(output_log, 'wt') as csv_file:
+            csv_file.write(logname + ' is successfully processed')
+    except Exception as e:
+        logname = 'Error AURIncidentIV-' + file_name + '.log'
+        output_log = os.path.join(pathlog, logname)
+        with open(output_log, 'wt') as csv_file:
+            csv_file.write("Error:" + str(e) + "\nFile: " + file_name)
+
+
+# In[2]:
+
+
+import glob,os
+#path = r'########' # folder path
+os.chdir(r"############")
+file_name = glob.glob("*checked.csv")
+if __name__ == "__main__":
+    for file_name in file_name:
+        main(file_name)
+
+
+# In[ ]:
+
+
+
+
